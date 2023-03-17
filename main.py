@@ -30,7 +30,7 @@ def load_templates():
 
 
 # Match card value using template matching
-def match_card_value(card_image, templates, threshold=0.8):
+def match_card_value(card_image, templates, threshold=0.9):
     card_gray = cv2.cvtColor(card_image, cv2.COLOR_BGR2GRAY)
     for value, template in templates.items():
         res = cv2.matchTemplate(card_gray, template, cv2.TM_CCOEFF_NORMED)
@@ -53,59 +53,23 @@ def extract_card_values(card_images, templates):
     return card_values
 
 
-# Get text from the image
-""" def get_text(image):
-    return pytesseract.image_to_string(image) """
-
-
-def non_max_suppression(boxes, overlapThresh):
-    if len(boxes) == 0:
-        return []
-
-    pick = []
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
-    area = (x2 - x1 + 1) * (y2 - y1 + 1)
-    idxs = np.argsort(y2)
-
-    while len(idxs) > 0:
-        last = len(idxs) - 1
-        i = idxs[last]
-        pick.append(i)
-        xx1 = np.maximum(x1[i], x1[idxs[:last]])
-        yy1 = np.maximum(y1[i], y1[idxs[:last]])
-        xx2 = np.minimum(x2[i], x2[idxs[:last]])
-        yy2 = np.minimum(y2[i], y2[idxs[:last]])
-        w = np.maximum(0, xx2 - xx1 + 1)
-        h = np.maximum(0, yy2 - yy1 + 1)
-        overlap = (w * h) / area[idxs[:last]]
-        idxs = np.delete(idxs, np.concatenate(
-            ([last], np.where(overlap > overlapThresh)[0])))
-    return boxes[pick].astype("int")
-
 # Preprocess the image for contour detection
-
-
 def preprocess_image(image):
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresholded_image = cv2.threshold(
         gray_image, 128, 255, cv2.THRESH_BINARY)
     return thresholded_image
 
+
 # Find card contours
-
-
 def find_card_contours(image):
     preprocessed_image = preprocess_image(image)
     contours, _ = cv2.findContours(
         preprocessed_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     return contours
 
+
 # Filter card contours based on size and aspect ratio
-
-
 def filter_card_contours(contours, min_area=35000, max_area=45000, min_aspect_ratio=0.5, max_aspect_ratio=1):
     card_contours = []
     for contour in contours:
@@ -152,14 +116,14 @@ def evaluate_poker_hand(hand):
     value_counts = Counter(values)
 
     value_ranks = {str(i): i for i in range(2, 11)}
-    value_ranks.update({"T": 10, "J": 11, "Q": 12, "K": 13, "A": 14})
+    value_ranks.update({"10": 10, "J": 11, "Q": 12, "K": 13, "A": 14})
 
     sorted_values = sorted(values, key=lambda x: value_ranks[x])
-    straight = any([value_ranks[sorted_values[i]] ==
+    straight = all([value_ranks[sorted_values[i]] ==
                    value_ranks[sorted_values[i-1]] + 1 for i in range(1, len(sorted_values))])
 
     if straight:
-        return 3
+        return 4
     elif any(count == 4 for count in value_counts.values()):
         return 20
     elif any(count == 3 for count in value_counts.values()):
@@ -206,12 +170,12 @@ def calculate_expected_value(kept_cards, discarded_cards):
 
         # Evaluate the new hand
         score = evaluate_poker_hand(new_hand)
+        # print(f'hand: {new_hand} score: {score}')
 
         total_score += score
 
     # Calculate the average score (expected value) of the hand after mulligan
-    expected_value = total_score / num_simulations
-
+    expected_value = total_score / (num_simulations/100)
     return expected_value
 
 
@@ -278,23 +242,26 @@ def main():
     # Save the image with bounding boxes
     cv2.imwrite('detected_cards.png', screen)
 
-    # Decide which cards to mulligan
-    mulligan_indices = decide_mulligan(card_values)
-    print(f'Mulligan indices: {mulligan_indices}')
+    if len(card_values) == 5:
+        # Decide which cards to mulligan
+        mulligan_indices = decide_mulligan(card_values)
+        print(f'Mulligan indices: {mulligan_indices}')
 
-    # Focus the window by clicking the top-left corner of the first card
-    first_card_x, first_card_y, _, _ = card_positions[0]
-    pyautogui.click(first_card_x/2, first_card_y/2)
+        # Focus the window by clicking the top-left corner of the first card
+        first_card_x, first_card_y, _, _ = card_positions[0]
+        pyautogui.click(first_card_x/2, first_card_y/2)
 
-# Click on the cards to keep
-    for index, (x, y, w, h) in enumerate(card_positions):
-        if index not in mulligan_indices:
-            # Calculate the click coordinates
-            click_x = (x + w // 2)/2
-            click_y = (y + h // 2)/2
+        # Click on the cards to keep
+        for index, (x, y, w, h) in enumerate(card_positions):
+            if index not in mulligan_indices:
+                # Calculate the click coordinates
+                click_x = (x + w // 2)/2
+                click_y = (y + h // 2)/2
 
-            print(f"Click attempt at coordinates: ({click_x}, {click_y})")
-            pyautogui.click(click_x, click_y)
+                print(f"Click attempt at coordinates: ({click_x}, {click_y})")
+                pyautogui.click(click_x, click_y)
+    else:
+        print("Not enough cards detected. Only found " + str(len(card_values)))
 
 
 if __name__ == '__main__':
