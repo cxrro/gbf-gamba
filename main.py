@@ -55,8 +55,8 @@ def filter_card_contours(contours, min_area=100, max_area=90000, min_aspect_rati
 def detect_card_positions(screen):
     gray_image, preprocessed_image = preprocess_image(screen)
     # Save the thresholded image
-    cv2.imwrite('gray_image.png', gray_image)
-    cv2.imwrite('thresholded_image.png', preprocessed_image)
+    # cv2.imwrite('gray_image.png', gray_image)
+    # cv2.imwrite('thresholded_image.png', preprocessed_image)
     contours, _ = cv2.findContours(
         preprocessed_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -75,15 +75,24 @@ def load_templates():
 
 
 # Match card value using template matching
-def match_card_value(card_image, templates, threshold=0.8):
+def match_card_value(card_image, templates, threshold=0.9):
     card_gray = cv2.cvtColor(card_image, cv2.COLOR_BGR2GRAY)
 
     # Crop the card_gray image to the top-left corner
     cropped_card_gray = card_gray[0:50, 0:40]
-    cv2.imwrite('crop.png', cropped_card_gray)
     for value, template in templates.items():
         res = cv2.matchTemplate(
             cropped_card_gray, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        if max_val > threshold:
+            return value
+    return None
+
+
+def match_card_value_double(card_image, templates, threshold=0.9):
+    for value, template in templates.items():
+        res = cv2.matchTemplate(
+            card_image, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
         if max_val > threshold:
             return value
@@ -223,10 +232,46 @@ def click(button):
     pyautogui.click(x, y)
 
 
-def is_double_up_mode(screen, double_up_template, threshold=0.8):
+def detect_single_card(region, templates, threshold=0.5):
+
+    # Extract card image
+    card_image = capture_screen(region)
+
+    # Crop the top left corner of the card image
+    cropped_corner = card_image[0:70, 0:56]
+
+    # resize to match template size
+    scale = 5/7
+    resized_corner = cv2.resize(
+        cropped_corner, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    gray_corner = card_gray = cv2.cvtColor(
+        cropped_corner, cv2.COLOR_BGR2GRAY)
+    processed_corner = high_contrast_image = cv2.addWeighted(
+        gray_corner, 1.6, gray_corner, 0, 0)
+    cv2.imwrite('processed_corner.png', processed_corner)
+
+    # Get the value of the card
+    value = match_card_value_double(processed_corner, templates, threshold)
+
+    return value
+
+
+def value_to_int(card_value):
+    face_cards = {'J': 11, 'Q': 12, 'K': 13, 'A': 14}
+
+    if card_value.isdigit():
+        return int(card_value)
+    elif card_value in face_cards:
+        return face_cards[card_value]
+    else:
+        raise ValueError(f"Invalid card value: {card_value}")
+
+
+def is_double_up_mode(double_up_template, threshold=0.8):
+    mode_region = (140*2, 150*2, 640*2, 250*2)
+    screen = capture_screen(mode_region)
     gray_screen = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
-    cv2.imwrite('mode.png', gray_screen)
-    print("took a pic of mode")
+
     res = cv2.matchTemplate(
         gray_screen, double_up_template, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, _ = cv2.minMaxLoc(res)
@@ -234,40 +279,33 @@ def is_double_up_mode(screen, double_up_template, threshold=0.8):
     return max_val > threshold
 
 
-def handle_double_up_mode(mode_screen, double_up_template, double_up_region, templates):
-    if is_double_up_mode(mode_screen, double_up_template):
-        # Game is in double up mode
-        print("Double up mode detected")
+def play_double_up(double_up_template, templates):
+    card1_region = (242*2, 402*2, 360*2, 570*2)
+    # card2_region = (401*2, 401*2, 520*2, 570*2)
 
-        # Find the card position in double up mode
-        double_up_screen = capture_screen(double_up_region)
-        double_up_card_position = detect_double_up_card_position(
-            double_up_screen)
+    card1_value = detect_single_card(card1_region, templates)
+    # card2_value = detect_single_card(card2_region, templates)
 
-        # Extract the card image
-        x, y, w, h = double_up_card_position
-        double_up_card_image = double_up_screen[y:y+h, x:x+w]
-
-        # Extract the card value
-        value = extract_card_value(
-            double_up_card_image, templates)
-        print(f"Double up card value: {value}")
-
-        def higher_or_lower(self):
-            # Decide whether to click higher or lower
-            if value > 8:
-                print("Clicking higher")
-                click("right")
-            else:
-                print("Clicking lower")
-                click("left")
-
-        higher_or_lower(self)
-
+    if card1_value:
+        value = value_to_int(card1_value)
+        # Decide whether to click higher or lower
+        if value > 7:
+            print(str(value) + " lower")
+            click("right")
+        else:
+            print(str(value) + " higher")
+            click("left")
+        # wait for result
+        time.sleep(1)
+        click("ok")
+        if not is_double_up_mode(double_up_template):
+            print("i lost :-(")
+            main()
     else:
-        # Game is not in double up mode
-        print("Not in double up mode")
-        # main()
+        print("couldn't read card 1 value")
+
+    def decide_play_again():
+        pass
 
 
 # Main function
@@ -276,12 +314,9 @@ def main():
     top = 850
     table_region = (left, top, 1300, 1200)
     money_region = (220, 1240, 1300, 1400)
-    mode_region = (140*2, 150*2, 640*2, 250*2)
-    double_up_region = (230, 390, 340, 190)
 
     # Capture the screen
     screen = capture_screen(table_region)
-    cv2.imwrite('captured_screen.png', screen)  # Save the captured screen
 
     # Detect card positions
     card_positions = detect_card_positions(screen)
@@ -296,7 +331,7 @@ def main():
     # Load the templates and extract card values
     templates = load_templates()
     # Extract card values with a loop for lowering the threshold
-    threshold = 0.9
+    threshold = 1.0
     card_values = []
     while len(card_values) < 5 and threshold >= 0:
         card_values = extract_card_values(card_images, templates, threshold)
@@ -346,12 +381,15 @@ def main():
     # Load the double up mode template
     double_up_template = cv2.imread(
         'double_up_template.png', cv2.IMREAD_GRAYSCALE)
-    mode_screen = capture_screen(mode_region)
 
-    time.sleep(3)
-    # Handle double up mode
-    handle_double_up_mode(mode_screen, double_up_template,
-                          double_up_region, templates)
+    time.sleep(2)
+    # Check for double up mode
+    if is_double_up_mode(double_up_template):
+        print("Playing double up...")
+        play_double_up(double_up_template, templates)
+    else:
+        print("Not in double up mode")
+        main()
 
 
 if __name__ == '__main__':
