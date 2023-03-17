@@ -7,6 +7,7 @@ import cv2
 import random
 import os
 import glob
+import time
 
 # Configure the path to the Tesseract executable
 # pytesseract.pytesseract.tesseract_cmd = '/System/Volumes/Data/opt/homebrew/Cellar/tesseract/5.3.0_1/bin/tesseract'
@@ -23,9 +24,9 @@ def capture_screen(region=None):
 # Preprocess the image for contour detection
 def preprocess_image(image):
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    thresholded_image = cv2.adaptiveThreshold(
-        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-    return thresholded_image
+    _, thresholded_image = cv2.threshold(
+        gray_image, 128, 255, cv2.THRESH_BINARY)
+    return gray_image, thresholded_image
 
 
 # Find card contours
@@ -37,7 +38,7 @@ def find_card_contours(image):
 
 
 # Filter card contours based on size and aspect ratio
-def filter_card_contours(contours, min_area=100, max_area=30000, min_aspect_ratio=0, max_aspect_ratio=2):
+def filter_card_contours(contours, min_area=100, max_area=90000, min_aspect_ratio=0, max_aspect_ratio=2):
     card_contours = []
     for contour in contours:
         area = cv2.contourArea(contour)
@@ -52,7 +53,14 @@ def filter_card_contours(contours, min_area=100, max_area=30000, min_aspect_rati
 
 # Detect the positions of the playing cards
 def detect_card_positions(screen):
-    contours = find_card_contours(screen)
+    gray_image, preprocessed_image = preprocess_image(screen)
+    # Save the thresholded image
+    cv2.imwrite('gray_image.png', gray_image)
+    cv2.imwrite('thresholded_image.png', preprocessed_image)
+    contours, _ = cv2.findContours(
+        preprocessed_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Filter the card contours
     card_positions = filter_card_contours(contours)
     return card_positions
 
@@ -67,12 +75,12 @@ def load_templates():
 
 
 # Match card value using template matching
-def match_card_value(card_image, templates, threshold=0.9):
+def match_card_value(card_image, templates, threshold=0.8):
     card_gray = cv2.cvtColor(card_image, cv2.COLOR_BGR2GRAY)
 
     # Crop the card_gray image to the top-left corner
-    template_height, template_width = list(templates.values())[0].shape
-    cropped_card_gray = card_gray[:template_height, :template_width]
+    cropped_card_gray = card_gray[0:50, 0:40]
+    cv2.imwrite('crop.png', cropped_card_gray)
     for value, template in templates.items():
         res = cv2.matchTemplate(
             cropped_card_gray, template, cv2.TM_CCOEFF_NORMED)
@@ -83,34 +91,15 @@ def match_card_value(card_image, templates, threshold=0.9):
 
 
 # Extract card values using template matching
-def extract_card_values(card_images, templates):
+def extract_card_values(card_images, templates, threshold):
     card_values = []
     for img in card_images:
-        matched_value = match_card_value(img, templates)
+        matched_value = match_card_value(img, templates, threshold)
         if matched_value is not None:
             card_values.append(matched_value)
         else:
             print("No match found for card value")
     return card_values
-
-
-""" def extract_card_values(card_images):
-    card_values = []
-    valid_values = ['2', '3', '4', '5', '6',
-                    '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
-
-    for img in card_images:
-        # Apply OCR to the card image
-        ocr_result = pytesseract.image_to_string(
-            img, config='--psm 6 -c tessedit_char_whitelist=23456789TJQKA')
-
-        # Check if OCR result is a valid card value
-        if ocr_result.strip() in valid_values:
-            card_values.append(ocr_result.strip())
-        else:
-            print(f"Invalid OCR result: {ocr_result.strip()}")
-
-    return card_values """
 
 
 def evaluate_poker_hand(hand):
@@ -119,13 +108,15 @@ def evaluate_poker_hand(hand):
     value_counts = Counter(values)
 
     value_ranks = {str(i): i for i in range(2, 11)}
-    value_ranks.update({"10": 10, "J": 11, "Q": 12, "K": 13, "A": 14})
+    value_ranks.update({"10": 10, "J": 11, "Q": 12, "K": 13, "A": 14, "Z": 15})
 
     sorted_values = sorted(values, key=lambda x: value_ranks[x])
     straight = all([value_ranks[sorted_values[i]] ==
                    value_ranks[sorted_values[i-1]] + 1 for i in range(1, len(sorted_values))])
 
     if straight:
+        # fix this for ace low straight
+        # also i think it doesnt work ever
         return 4
     elif any(count == 4 for count in value_counts.values()):
         return 20
@@ -141,7 +132,8 @@ def evaluate_poker_hand(hand):
 
 def calculate_expected_value(kept_cards, discarded_cards):
     base_deck = ['2', '3', '4', '5', '6', '7',
-                 '8', '9', '10', 'J', 'Q', 'K', 'A'] * 4
+                 '8', '9', '10', 'J', 'Q', 'K', 'A'] * 4 + ['Z']
+    # 'Z' is a joker
 
     # Make a copy of the base_deck before removing cards
     deck = base_deck.copy()
@@ -178,7 +170,7 @@ def calculate_expected_value(kept_cards, discarded_cards):
         total_score += score
 
     # Calculate the average score (expected value) of the hand after mulligan
-    expected_value = total_score / (num_simulations/100)
+    expected_value = total_score / (num_simulations/10)
     return expected_value
 
 
@@ -186,10 +178,18 @@ def decide_mulligan(hand):
     best_score = -1
     best_combination = []
 
-    # Iterate through all possible combinations of cards to keep (0 to 5 cards)
-    for num_cards_to_keep in range(6):
-        for combination in itertools.combinations(hand, num_cards_to_keep):
-            kept_cards = list(combination)
+    # Create a copy of the hand without the joker
+    hand_without_joker = [card for card in hand if card != 'Z']
+
+    # Iterate through all possible combinations of cards to keep (0 to 4 cards if joker is present, otherwise 0 to 5 cards)
+    max_cards_to_keep = 4 if 'Z' in hand else 5
+    for num_cards_to_keep in range(max_cards_to_keep + 1):
+        for combination in itertools.combinations(hand_without_joker, num_cards_to_keep):
+            # Reconstruct the kept_cards list with the joker in its original position
+            kept_cards = [card if card in combination or card ==
+                          'Z' else None for card in hand]
+            kept_cards = [card for card in kept_cards if card is not None]
+
             discarded_cards = [card for card in hand if card not in kept_cards]
 
             # Calculate the expected value of the current combination
@@ -212,10 +212,72 @@ def decide_mulligan(hand):
     return mulligan_indices
 
 
+def click(button):
+    y = 1460/2
+    if button == "ok":
+        x = 760/2
+    elif button == "left":
+        x = 600/2
+    elif button == "right":
+        x = 410
+    pyautogui.click(x, y)
+
+
+def is_double_up_mode(screen, double_up_template, threshold=0.8):
+    gray_screen = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
+    cv2.imwrite('mode.png', gray_screen)
+    print("took a pic of mode")
+    res = cv2.matchTemplate(
+        gray_screen, double_up_template, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, _ = cv2.minMaxLoc(res)
+
+    return max_val > threshold
+
+
+def handle_double_up_mode(mode_screen, double_up_template, double_up_region, templates):
+    if is_double_up_mode(mode_screen, double_up_template):
+        # Game is in double up mode
+        print("Double up mode detected")
+
+        # Find the card position in double up mode
+        double_up_screen = capture_screen(double_up_region)
+        double_up_card_position = detect_double_up_card_position(
+            double_up_screen)
+
+        # Extract the card image
+        x, y, w, h = double_up_card_position
+        double_up_card_image = double_up_screen[y:y+h, x:x+w]
+
+        # Extract the card value
+        value = extract_card_value(
+            double_up_card_image, templates)
+        print(f"Double up card value: {value}")
+
+        def higher_or_lower(self):
+            # Decide whether to click higher or lower
+            if value > 8:
+                print("Clicking higher")
+                click("right")
+            else:
+                print("Clicking lower")
+                click("left")
+
+        higher_or_lower(self)
+
+    else:
+        # Game is not in double up mode
+        print("Not in double up mode")
+        # main()
+
+
 # Main function
 def main():
-    table_region = (220, 850, 1300, 1200)
+    left = 240
+    top = 850
+    table_region = (left, top, 1300, 1200)
     money_region = (220, 1240, 1300, 1400)
+    mode_region = (140*2, 150*2, 640*2, 250*2)
+    double_up_region = (230, 390, 340, 190)
 
     # Capture the screen
     screen = capture_screen(table_region)
@@ -233,7 +295,13 @@ def main():
 
     # Load the templates and extract card values
     templates = load_templates()
-    card_values = extract_card_values(card_images, templates)
+    # Extract card values with a loop for lowering the threshold
+    threshold = 0.9
+    card_values = []
+    while len(card_values) < 5 and threshold >= 0:
+        card_values = extract_card_values(card_images, templates, threshold)
+        threshold -= 0.05
+
     print(f'Card values: {card_values}')
 
     # Draw bounding boxes around the detected cards
@@ -254,19 +322,36 @@ def main():
 
         # Focus the window by clicking the top-left corner of the first card
         first_card_x, first_card_y, _, _ = card_positions[0]
-        pyautogui.click(first_card_x/2, first_card_y/2)
+        pyautogui.click((left/2) + first_card_x/2, (top/2) + first_card_y/2)
 
         # Click on the cards to keep
         for index, (x, y, w, h) in enumerate(card_positions):
             if index not in mulligan_indices:
                 # Calculate the click coordinates
-                click_x = (x + w // 2)/2
-                click_y = (y + h // 2)/2
+                click_x = (left + (x + w // 2))/2
+                click_y = (top + (y + h // 2))/2
 
                 print(f"Click attempt at coordinates: ({click_x}, {click_y})")
                 pyautogui.click(click_x, click_y)
+        # wait for the cards to be selected
+        time.sleep(1)
+        # Click OK
+        click("ok")
+        # click deal or yes
+        time.sleep(3)
+        click("right")
     else:
         print("Not enough cards detected. Only found " + str(len(card_values)))
+
+    # Load the double up mode template
+    double_up_template = cv2.imread(
+        'double_up_template.png', cv2.IMREAD_GRAYSCALE)
+    mode_screen = capture_screen(mode_region)
+
+    time.sleep(3)
+    # Handle double up mode
+    handle_double_up_mode(mode_screen, double_up_template,
+                          double_up_region, templates)
 
 
 if __name__ == '__main__':
