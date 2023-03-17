@@ -20,44 +20,11 @@ def capture_screen(region=None):
     return cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
 
 
-# Load card value templates
-def load_templates():
-    templates = {}
-    for file in glob.glob("templates/*.png"):
-        name = os.path.splitext(os.path.basename(file))[0]
-        templates[name] = cv2.imread(file, cv2.IMREAD_GRAYSCALE)
-    return templates
-
-
-# Match card value using template matching
-def match_card_value(card_image, templates, threshold=0.9):
-    card_gray = cv2.cvtColor(card_image, cv2.COLOR_BGR2GRAY)
-    for value, template in templates.items():
-        res = cv2.matchTemplate(card_gray, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val > threshold:
-            return value
-    return None
-
-# Extract card values using template matching
-
-
-def extract_card_values(card_images, templates):
-    card_values = []
-    for img in card_images:
-        matched_value = match_card_value(img, templates)
-        if matched_value is not None:
-            card_values.append(matched_value)
-        else:
-            print("No match found for card value")
-    return card_values
-
-
 # Preprocess the image for contour detection
 def preprocess_image(image):
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresholded_image = cv2.threshold(
-        gray_image, 128, 255, cv2.THRESH_BINARY)
+    thresholded_image = cv2.adaptiveThreshold(
+        gray_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
     return thresholded_image
 
 
@@ -70,7 +37,7 @@ def find_card_contours(image):
 
 
 # Filter card contours based on size and aspect ratio
-def filter_card_contours(contours, min_area=35000, max_area=45000, min_aspect_ratio=0.5, max_aspect_ratio=1):
+def filter_card_contours(contours, min_area=100, max_area=30000, min_aspect_ratio=0, max_aspect_ratio=2):
     card_contours = []
     for contour in contours:
         area = cv2.contourArea(contour)
@@ -82,13 +49,49 @@ def filter_card_contours(contours, min_area=35000, max_area=45000, min_aspect_ra
 
     return card_contours
 
+
 # Detect the positions of the playing cards
-
-
 def detect_card_positions(screen):
     contours = find_card_contours(screen)
     card_positions = filter_card_contours(contours)
     return card_positions
+
+
+# Load card value templates
+def load_templates():
+    templates = {}
+    for file in glob.glob("templates/*.png"):
+        name = os.path.splitext(os.path.basename(file))[0]
+        templates[name] = cv2.imread(file, cv2.IMREAD_GRAYSCALE)
+    return templates
+
+
+# Match card value using template matching
+def match_card_value(card_image, templates, threshold=0.9):
+    card_gray = cv2.cvtColor(card_image, cv2.COLOR_BGR2GRAY)
+
+    # Crop the card_gray image to the top-left corner
+    template_height, template_width = list(templates.values())[0].shape
+    cropped_card_gray = card_gray[:template_height, :template_width]
+    for value, template in templates.items():
+        res = cv2.matchTemplate(
+            cropped_card_gray, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        if max_val > threshold:
+            return value
+    return None
+
+
+# Extract card values using template matching
+def extract_card_values(card_images, templates):
+    card_values = []
+    for img in card_images:
+        matched_value = match_card_value(img, templates)
+        if matched_value is not None:
+            card_values.append(matched_value)
+        else:
+            print("No match found for card value")
+    return card_values
 
 
 """ def extract_card_values(card_images):
@@ -211,9 +214,11 @@ def decide_mulligan(hand):
 
 # Main function
 def main():
+    table_region = (220, 850, 1300, 1200)
+    money_region = (220, 1240, 1300, 1400)
 
     # Capture the screen
-    screen = capture_screen()
+    screen = capture_screen(table_region)
     cv2.imwrite('captured_screen.png', screen)  # Save the captured screen
 
     # Detect card positions
