@@ -232,7 +232,7 @@ def click(button):
     pyautogui.click(x, y)
 
 
-def detect_single_card(region, templates, threshold=0.5):
+def detect_single_card(region, templates):
 
     # Extract card image
     card_image = capture_screen(region)
@@ -247,11 +247,15 @@ def detect_single_card(region, templates, threshold=0.5):
     gray_corner = card_gray = cv2.cvtColor(
         cropped_corner, cv2.COLOR_BGR2GRAY)
     processed_corner = high_contrast_image = cv2.addWeighted(
-        gray_corner, 1.6, gray_corner, 0, 0)
+        gray_corner, 1.3, gray_corner, 0, 0)
     cv2.imwrite('processed_corner.png', processed_corner)
 
+    threshold = 1.0
+    value = None
     # Get the value of the card
-    value = match_card_value_double(processed_corner, templates, threshold)
+    while value is None and threshold > 0.4:
+        threshold -= 0.1
+        value = match_card_value_double(processed_corner, templates, threshold)
 
     return value
 
@@ -280,32 +284,49 @@ def is_double_up_mode(double_up_template, threshold=0.8):
 
 
 def play_double_up(double_up_template, templates):
-    card1_region = (242*2, 402*2, 360*2, 570*2)
-    # card2_region = (401*2, 401*2, 520*2, 570*2)
+    turn = 1
 
-    card1_value = detect_single_card(card1_region, templates)
-    # card2_value = detect_single_card(card2_region, templates)
+    def double_up_round():
+        card1_region = (242*2, 402*2, 360*2, 570*2)
+        card2_region = (401*2, 401*2, 520*2, 570*2)
 
-    if card1_value:
-        value = value_to_int(card1_value)
-        # Decide whether to click higher or lower
-        if value > 7:
-            print(str(value) + " lower")
-            click("right")
+        card1_value = detect_single_card(card1_region, templates)
+        card2_value = detect_single_card(card2_region, templates)
+        print(card1_value, card2_value)
+
+        if card1_value:
+            value = value_to_int(card1_value)
+            # Decide whether to click higher or lower
+            if value > 7:
+                print(str(value) + " lower")
+                click("right")
+            else:
+                print(str(value) + " higher")
+                click("left")
+            # wait for result
+            time.sleep(1)
+            decide_play_again()
         else:
-            print(str(value) + " higher")
-            click("left")
-        # wait for result
-        time.sleep(1)
-        click("ok")
-        if not is_double_up_mode(double_up_template):
-            print("i lost :-(")
-            main()
-    else:
-        print("couldn't read card 1 value")
+            print("couldn't read card 1 value")
 
     def decide_play_again():
-        pass
+        global turn
+        # did we lose
+        card2 = capture_screen(card2_region)
+        cv2.imwrite(f'card2.png', card2)
+        click("right")
+
+        # we did not lose
+        if is_double_up_mode(double_up_template) and turn < 5:
+            turn += 1
+            play_double_up(double_up_template, templates)
+
+        # we lost
+        else:
+            print("i lost :-(")
+            main()
+
+    double_up_round()
 
 
 # Main function
@@ -375,6 +396,9 @@ def main():
         # click deal or yes
         time.sleep(3)
         click("right")
+    elif len(card_values) == 1:
+        # clicks deal if only one card is detected
+        click("ok")
     else:
         print("Not enough cards detected. Only found " + str(len(card_values)))
 
