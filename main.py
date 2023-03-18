@@ -107,7 +107,7 @@ def extract_card_values(card_images, templates, threshold):
         if matched_value is not None:
             card_values.append(matched_value)
         else:
-            print("No match found for card value")
+            continue
     return card_values
 
 
@@ -149,16 +149,12 @@ def calculate_expected_value(kept_cards, discarded_cards):
     for card in kept_cards:
         card_str = card
         if card_str not in deck:
-            print(f"Card not found in deck: {card_str}")
-            print(f"Kept cards: {kept_cards}")
             continue
         deck.remove(card_str)
 
     for card in kept_cards:
         card_str = card
         if card_str not in deck:
-            print(f"Card not found in deck: {card_str}")
-            print(f"Kept cards: {kept_cards}")
             continue
         deck.remove(card_str)
 
@@ -206,8 +202,8 @@ def decide_mulligan(hand):
                 kept_cards, discarded_cards)
 
             # Print the current combination and its expected value
-            print(
-                f"Kept cards: {kept_cards}, Discarded cards: {discarded_cards}, Expected value: {expected_value}")
+            # print(
+            #    f"Kept cards: {kept_cards}, Discarded cards: {discarded_cards}, Expected value: {expected_value}")
 
             # Update the best combination if the current expected value is higher
             if expected_value > best_score:
@@ -246,8 +242,8 @@ def detect_single_card(region, templates):
         cropped_corner, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     gray_corner = card_gray = cv2.cvtColor(
         cropped_corner, cv2.COLOR_BGR2GRAY)
-    processed_corner = high_contrast_image = cv2.addWeighted(
-        gray_corner, 1.3, gray_corner, 0, 0)
+    processed_corner = cv2.addWeighted(
+        gray_corner, 1.3, gray_corner, 0, -10)
     cv2.imwrite('processed_corner.png', processed_corner)
 
     threshold = 1.0
@@ -284,47 +280,82 @@ def is_double_up_mode(double_up_template, threshold=0.8):
 
 
 def play_double_up(double_up_template, templates):
-    turn = 1
+    turn = 0
 
     def double_up_round():
+        time.sleep(1)
+        nonlocal turn
+        turn += 1
         card1_region = (242*2, 402*2, 360*2, 570*2)
-        card2_region = (401*2, 401*2, 520*2, 570*2)
 
         card1_value = detect_single_card(card1_region, templates)
-        card2_value = detect_single_card(card2_region, templates)
-        print(card1_value, card2_value)
+        print(card1_value)
 
         if card1_value:
             value = value_to_int(card1_value)
             # Decide whether to click higher or lower
             if value > 7:
-                print(str(value) + " lower")
+                print("lower")
                 click("right")
             else:
-                print(str(value) + " higher")
+                print("higher")
                 click("left")
             # wait for result
-            time.sleep(1)
+            time.sleep(2)
+            print("deciding play again")
             decide_play_again()
         else:
             print("couldn't read card 1 value")
 
-    def decide_play_again():
-        global turn
-        # did we lose
-        card2 = capture_screen(card2_region)
-        cv2.imwrite(f'card2.png', card2)
-        click("right")
+    def is_double_up_lost(lost_template, threshold=1.0):
+        lost_region = (330*2, 270*2, 440*2, 310*2)
+        screen = capture_screen(lost_region)
+        gray_screen = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
 
-        # we did not lose
-        if is_double_up_mode(double_up_template) and turn < 5:
-            turn += 1
-            play_double_up(double_up_template, templates)
-
-        # we lost
+        res = cv2.matchTemplate(
+            gray_screen, lost_template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(res)
+        if max_val > threshold:
+            print("lost double up")
         else:
-            print("i lost :-(")
-            main()
+            print("not lost double up")
+        return max_val > threshold
+
+    def decide_play_again():
+        nonlocal turn
+        lost_template = cv2.imread(
+            'lost_template.png', cv2.IMREAD_GRAYSCALE)
+        if is_double_up_lost(lost_template):
+            click("ok")
+            print("quitting out because lost")
+        else:
+            card2_region = (401*2, 401*2, 520*2, 570*2)
+            card2_value = detect_single_card(card2_region, templates)
+            value = value_to_int(card2_value)
+            # if we won, play again
+            if turn > 4:
+                click("right")
+                print("playing again because turn > 4")
+            elif turn > 6:
+                if card2_value == (7 | 8 | 9):
+                    click("left")
+                    main()
+                    print(
+                        "quitting out because turn > 6 and card2_value == (7 | 8 | 9)")
+                else:
+                    click("right")
+                    double_up_round()
+                    print(
+                        "playing again because turn > 6 and card2_value != (7 | 8 | 9)")
+            else:
+                if card2_value == (2 | 14):
+                    click("right")
+                    double_up_round()
+                    print("playing again because turn < 6 and card2_value == (2 | 14)")
+                else:
+                    click("left")
+                    print("quitting out because turn < 6 and card2_value != (2 | 14)")
+                    main()
 
     double_up_round()
 
